@@ -1,0 +1,291 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Multi-tenant Company
+model Company {
+  id            String    @id @default(cuid())
+  name          String
+  slug          String    @unique
+  subscription  String    @default("trial") // trial, starter, professional, enterprise
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  users         User[]
+  projects      Project[]
+  subcontractors Subcontractor[]
+  crews         Crew[]
+  qcTemplates   QCToleranceTemplate[]
+}
+
+// User with role-based access
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  password      String    // Hashed password
+  role          String    @default("installer") // admin, pm, installer, inspector, executive
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  productionEntries  ProductionEntry[]
+  inspections        QCInspection[]
+  projectAssignments UserProjectAssignment[]
+}
+
+// Project assignment for many-to-many
+model UserProjectAssignment {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+  
+  @@unique([userId, projectId])
+}
+
+// Project with all details
+model Project {
+  id                  String    @id @default(cuid())
+  name                String
+  location            String
+  type                String    @default("utility") // utility, ci (commercial & industrial)
+  status              String    @default("active") // active, completed, on-hold
+  
+  // Total quantities
+  totalPiles          Int       @default(0)
+  totalRackingTables  Int       @default(0)
+  totalModules        Int       @default(0)
+  
+  // Schedule
+  plannedStartDate    DateTime
+  plannedEndDate      DateTime
+  actualStartDate     DateTime?
+  actualEndDate       DateTime?
+  
+  // Planned production rates (per day)
+  plannedPilesPerDay     Float @default(0)
+  plannedRackingPerDay   Float @default(0)
+  plannedModulesPerDay   Float @default(0)
+  
+  companyId           String
+  company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  productionEntries   ProductionEntry[]
+  inspections         QCInspection[]
+  qcIssues            QCIssue[]
+  userAssignments     UserProjectAssignment[]
+}
+
+// Production entry (field input)
+model ProductionEntry {
+  id              String    @id @default(cuid())
+  date            DateTime
+  piles           Int       @default(0)
+  rackingTables   Int       @default(0)
+  modules         Int       @default(0)
+  notes           String?
+  
+  // Offline sync
+  syncStatus      String    @default("synced") // synced, pending, conflict
+  localId         String?   // For offline entries
+  deviceId        String?   // Device identifier for conflict resolution
+  
+  projectId       String
+  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  crewId          String?
+  crew            Crew?     @relation(fields: [crewId], references: [id])
+  subcontractorId String?
+  subcontractor   Subcontractor? @relation(fields: [subcontractorId], references: [id])
+  
+  photos          ProductionPhoto[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([projectId, date])
+}
+
+model ProductionPhoto {
+  id              String    @id @default(cuid())
+  url             String    // Base64 or URL
+  caption         String?
+  productionEntryId String
+  productionEntry ProductionEntry @relation(fields: [productionEntryId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+}
+
+// Subcontractor tracking
+model Subcontractor {
+  id          String    @id @default(cuid())
+  name        String
+  contactPerson String?
+  phone       String?
+  email       String?
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  productionEntries ProductionEntry[]
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// Crew tracking
+model Crew {
+  id          String    @id @default(cuid())
+  name        String
+  leadName    String?
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  productionEntries ProductionEntry[]
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// QC Tolerance Template
+model QCToleranceTemplate {
+  id          String    @id @default(cuid())
+  name        String
+  category    String    // piles, racking, modules
+  description String?
+  
+  // Tolerance ranges (stored as JSON)
+  tolerances  String    // JSON: [{name, min, max, unit}]
+  
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// QC Inspection
+model QCInspection {
+  id              String    @id @default(cuid())
+  date            DateTime
+  category        String    // piles, racking, modules
+  area            String?   // Area or row identifier
+  status          String    @default("pass") // pass, fail, pending
+  
+  projectId       String
+  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  notes           String?
+  
+  // Offline sync
+  syncStatus      String    @default("synced")
+  localId         String?
+  deviceId        String?
+  
+  items           QCInspectionItem[]
+  issues          QCIssue[]
+  photos          InspectionPhoto[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([projectId, date])
+  @@index([status])
+}
+
+model QCInspectionItem {
+  id              String    @id @default(cuid())
+  name            String    // Measurement name
+  measuredValue   Float
+  minValue        Float
+  maxValue        Float
+  unit            String
+  passed          Boolean
+  notes           String?
+  
+  inspectionId    String
+  inspection      QCInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime  @default(now())
+}
+
+model InspectionPhoto {
+  id              String    @id @default(cuid())
+  url             String
+  caption         String?
+  inspectionId    String
+  inspection      QCInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+}
+
+// QC Issue tracking
+model QCIssue {
+  id              String    @id @default(cuid())
+  status          String    @default("open") // open, corrected, verified
+  description     String
+  category        String
+  
+  projectId       String
+  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  inspectionId    String?
+  inspection      QCInspection? @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+  
+  assignedToType  String?   // crew, subcontractor
+  assignedToId    String?
+  
+  openedAt        DateTime  @default(now())
+  correctedAt     DateTime?
+  verifiedAt      DateTime?
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([projectId, status])
+}
+
+// Sync queue for offline entries
+model SyncQueue {
+  id          String    @id @default(cuid())
+  action      String    // create, update, delete
+  entity      String    // production, inspection
+  payload     String    // JSON payload
+  deviceId    String
+  companyId   String
+  status      String    @default("pending") // pending, synced, conflict
+  error       String?
+  createdAt   DateTime  @default(now())
+  syncedAt    DateTime?
+  
+  @@index([status, companyId])
+}
+
+// Report configuration
+model ReportConfig {
+  id              String    @id @default(cuid())
+  name            String
+  type            String    // daily, weekly, monthly, custom
+  schedule        String?   // JSON schedule config
+  recipients      String?   // JSON array of emails
+  companyId       String
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
