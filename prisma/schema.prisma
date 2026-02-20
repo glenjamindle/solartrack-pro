@@ -16,6 +16,11 @@ model Company {
   name          String
   slug          String    @unique
   subscription  String    @default("trial") // trial, starter, professional, enterprise
+  logo          String?   // Base64 or URL for company logo
+  
+  // Theme settings
+  primaryColor  String?   @default("#f97316") // Orange default
+  
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   
@@ -24,6 +29,7 @@ model Company {
   subcontractors Subcontractor[]
   crews         Crew[]
   qcTemplates   QCToleranceTemplate[]
+  rackingSystems RackingSystem[]
 }
 
 // User with role-based access
@@ -42,6 +48,7 @@ model User {
   productionEntries  ProductionEntry[]
   inspections        QCInspection[]
   projectAssignments UserProjectAssignment[]
+  refusals           PileRefusal[]
 }
 
 // Project assignment for many-to-many
@@ -62,7 +69,7 @@ model Project {
   name                String
   location            String
   type                String    @default("utility") // utility, ci (commercial & industrial)
-  status              String    @default("active") // active, completed, on-hold
+  status              String    @default("active") // active, on-hold, completed, archived
   
   // Total quantities
   totalPiles          Int       @default(0)
@@ -80,6 +87,14 @@ model Project {
   plannedRackingPerDay   Float @default(0)
   plannedModulesPerDay   Float @default(0)
   
+  // Pile ID Format - flexible naming system
+  pileIdFormat        String?   @default("{Row}-{Pile}") // e.g., "{Block}-{Row}-{Pile}" or "{Row}-{Pile}"
+  pileIdExample       String?   // Example: "N1-35-22" or "35-22"
+  
+  // Selected racking system for this project
+  rackingSystemId     String?
+  rackingSystem       RackingSystem? @relation(fields: [rackingSystemId], references: [id])
+  
   companyId           String
   company             Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   
@@ -89,6 +104,7 @@ model Project {
   productionEntries   ProductionEntry[]
   inspections         QCInspection[]
   qcIssues            QCIssue[]
+  refusals            PileRefusal[]
   userAssignments     UserProjectAssignment[]
 }
 
@@ -133,6 +149,53 @@ model ProductionPhoto {
   createdAt       DateTime  @default(now())
 }
 
+// Pile Refusal - tracks piles that couldn't be driven to depth
+model PileRefusal {
+  id              String    @id @default(cuid())
+  
+  // Pile identification
+  pileId          String    // Full pile ID like "N1-35-22"
+  block           String?   // Block identifier if applicable
+  row             String?   // Row identifier
+  pileNumber      String?   // Pile number within row
+  
+  // Refusal details
+  dateDiscovered  DateTime
+  targetDepth     Float     // mm - design depth
+  achievedDepth   Float     // mm - actual depth achieved
+  refusalReason   String    // bedrock, cobble, soft_soil, obstruction, other
+  refusalNotes    String?
+  
+  // Status tracking
+  status          String    @default("open") // open, remediation_planned, extracted, reinstalled, verified
+  
+  // Remediation
+  remediationMethod String?  // engineer-approved method
+  remediationDate  DateTime?
+  engineerApproval String?  // Engineer name or approval reference
+  
+  projectId       String
+  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reportedBy      String    // User ID
+  reportedByUser  User      @relation(fields: [reportedBy], references: [id])
+  
+  photos          RefusalPhoto[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([projectId, status])
+}
+
+model RefusalPhoto {
+  id              String    @id @default(cuid())
+  url             String
+  caption         String?
+  refusalId       String
+  refusal         PileRefusal @relation(fields: [refusalId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+}
+
 // Subcontractor tracking
 model Subcontractor {
   id          String    @id @default(cuid())
@@ -163,7 +226,30 @@ model Crew {
   updatedAt   DateTime  @updatedAt
 }
 
-// QC Tolerance Template
+// Racking System - defines tolerance profiles for different manufacturers
+model RackingSystem {
+  id              String    @id @default(cuid())
+  name            String    // e.g., "NEXTracker 2.1"
+  manufacturer    String    // e.g., "NEXTracker"
+  version         String?   // e.g., "2.1"
+  description     String?
+  
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Tolerance profiles for different pile types (stored as JSON)
+  // Each profile includes: embedDepthMin, embedDepthMax, nsPlumbMax, ewPlumbMax, twistMax, spacingMin, spacingMax
+  interiorTolerances  String?  // JSON for interior pile tolerances
+  exteriorTolerances  String?  // JSON for exterior/boundary pile tolerances
+  motorTolerances     String?  // JSON for motor pile tolerances
+  
+  projects        Project[]
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// QC Tolerance Template (legacy - keeping for backwards compatibility)
 model QCToleranceTemplate {
   id          String    @id @default(cuid())
   name        String
@@ -185,7 +271,19 @@ model QCInspection {
   id              String    @id @default(cuid())
   date            DateTime
   category        String    // piles, racking, modules
+  
+  // Inspection scope
+  scope           String    @default("individual") // individual, batch, percentage
+  scopeCount      Int?      // Number of items for batch
+  scopePercentage Float?    // Percentage for statistical sampling
+  
+  // Location/identification
   area            String?   // Area or row identifier
+  pileIds         String?   // JSON array of pile IDs inspected
+  
+  // Pile type for tolerance matching
+  pileType        String?   @default("interior") // interior, exterior, motor
+  
   status          String    @default("pass") // pass, fail, pending
   
   projectId       String
@@ -213,7 +311,10 @@ model QCInspection {
 
 model QCInspectionItem {
   id              String    @id @default(cuid())
-  name            String    // Measurement name
+  pileId          String?   // Which pile this measurement is for
+  
+  // Measurement details
+  measurementType String    // embed_depth, ns_plumb, ew_plumb, twist, spacing, etc.
   measuredValue   Float
   minValue        Float
   maxValue        Float
@@ -231,6 +332,7 @@ model InspectionPhoto {
   id              String    @id @default(cuid())
   url             String
   caption         String?
+  pileId          String?   // Which pile the photo is for
   inspectionId    String
   inspection      QCInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
   createdAt       DateTime  @default(now())
@@ -242,6 +344,9 @@ model QCIssue {
   status          String    @default("open") // open, corrected, verified
   description     String
   category        String
+  
+  // Pile identification
+  pileId          String?
   
   projectId       String
   project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -265,7 +370,7 @@ model QCIssue {
 model SyncQueue {
   id          String    @id @default(cuid())
   action      String    // create, update, delete
-  entity      String    // production, inspection
+  entity      String    // production, inspection, refusal
   payload     String    // JSON payload
   deviceId    String
   companyId   String

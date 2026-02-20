@@ -49,7 +49,11 @@ export async function POST(request: NextRequest) {
       data: {
         date: new Date(data.date),
         category: data.category,
+        scope: data.scope || 'individual',
+        scopeCount: data.scopeCount,
         area: data.area,
+        pileIds: data.pileIds,
+        pileType: data.pileType || 'interior',
         status: data.status || 'pass',
         notes: data.notes,
         projectId: data.projectId,
@@ -58,6 +62,8 @@ export async function POST(request: NextRequest) {
         items: {
           create: data.items?.map((item: any) => ({
             name: item.name,
+            pileId: item.pileId,
+            measurementType: item.measurementType,
             measuredValue: item.measuredValue,
             minValue: item.minValue,
             maxValue: item.maxValue,

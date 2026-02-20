@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const companyId = searchParams.get('companyId');
     const projectId = searchParams.get('projectId');
+    const companyId = searchParams.get('companyId');
     
     if (projectId) {
       const project = await db.project.findUnique({
@@ -13,47 +15,28 @@ export async function GET(request: NextRequest) {
         include: {
           productionEntries: {
             orderBy: { date: 'desc' },
-            include: {
-              user: { select: { id: true, name: true } },
-              crew: { select: { id: true, name: true } },
-              subcontractor: { select: { id: true, name: true } },
-            }
+            include: { user: { select: { id: true, name: true } }, crew: true, subcontractor: true }
           },
-          inspections: {
-            orderBy: { date: 'desc' },
-            include: {
-              user: { select: { id: true, name: true } },
-              items: true,
-            }
-          },
-          qcIssues: {
-            orderBy: { openedAt: 'desc' },
-          },
-          userAssignments: {
-            include: { user: true }
-          }
+          inspections: { orderBy: { date: 'desc' }, include: { items: true, user: { select: { name: true } } } },
+          qcIssues: { orderBy: { openedAt: 'desc' } },
+          refusals: { orderBy: { dateDiscovered: 'desc' } },
+          rackingSystem: true,
         }
       });
-      
       return NextResponse.json({ project });
     }
-    
+
     if (companyId) {
       const projects = await db.project.findMany({
         where: { companyId },
         include: {
-          productionEntries: {
-            orderBy: { date: 'desc' },
-            take: 30,
-          },
+          productionEntries: { orderBy: { date: 'desc' }, take: 30 },
           inspections: true,
-          qcIssues: {
-            where: { status: 'open' }
-          },
+          qcIssues: { where: { status: 'open' } },
+          refusals: { where: { status: 'open' } },
         },
         orderBy: { createdAt: 'desc' }
       });
-      
       return NextResponse.json({ projects });
     }
 
@@ -82,6 +65,8 @@ export async function POST(request: NextRequest) {
         plannedPilesPerDay: data.plannedPilesPerDay || 0,
         plannedRackingPerDay: data.plannedRackingPerDay || 0,
         plannedModulesPerDay: data.plannedModulesPerDay || 0,
+        pileIdFormat: data.pileIdFormat || '{Row}-{Pile}',
+        rackingSystemId: data.rackingSystemId,
         companyId: data.companyId,
       }
     });
@@ -112,8 +97,10 @@ export async function PUT(request: NextRequest) {
         plannedPilesPerDay: data.plannedPilesPerDay,
         plannedRackingPerDay: data.plannedRackingPerDay,
         plannedModulesPerDay: data.plannedModulesPerDay,
-        actualStartDate: data.actualStartDate ? new Date(data.actualStartDate) : undefined,
-        actualEndDate: data.actualEndDate ? new Date(data.actualEndDate) : undefined,
+        pileIdFormat: data.pileIdFormat,
+        rackingSystemId: data.rackingSystemId,
+        actualStartDate: data.actualStartDate ? new Date(data.actualStartDate) : null,
+        actualEndDate: data.actualEndDate ? new Date(data.actualEndDate) : null,
       }
     });
 
@@ -121,5 +108,22 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('Update project error:', error);
     return NextResponse.json({ error: 'Failed to update project' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    
+    if (!id) {
+      return NextResponse.json({ error: 'id required' }, { status: 400 });
+    }
+
+    await db.project.delete({ where: { id } });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Delete project error:', error);
+    return NextResponse.json({ error: 'Failed to delete project' }, { status: 500 });
   }
 }
